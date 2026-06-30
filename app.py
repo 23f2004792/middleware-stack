@@ -1,21 +1,22 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 import uuid
 import time
 from collections import defaultdict
 
+EMAIL = "23f2004792@ds.study.iitm.ac.in"
+
 app = FastAPI()
 
-EMAIL = "23f2004792@ds.study.iitm.ac.in"
+ALLOWED_ORIGINS = [
+    "https://app-imaxbw.example.com",
+    "https://exam.sanand.workers.dev",
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://app-imaxbw.example.com",
-        "https://exam.sanand.workers.dev",
-    ],
-    allow_credentials=False,
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["X-Request-ID"],
@@ -28,48 +29,56 @@ client_hits = defaultdict(list)
 
 
 @app.middleware("http")
-async def request_context(request: Request, call_next):
-    request_id = request.headers.get("X-Request-ID")
+async def middleware(request: Request, call_next):
 
+    # -------------------------
+    # Request ID
+    # -------------------------
+    request_id = request.headers.get("X-Request-ID")
     if request_id is None:
         request_id = str(uuid.uuid4())
 
     request.state.request_id = request_id
+
+    # -------------------------
+    # Skip rate limiting for preflight
+    # -------------------------
+    if request.method != "OPTIONS":
+
+        client = request.headers.get("X-Client-Id")
+
+        if client:
+            now = time.monotonic()
+
+            hits = client_hits[client]
+
+            while hits and now - hits[0] >= WINDOW:
+                hits.pop(0)
+
+            if len(hits) >= LIMIT:
+
+                response = JSONResponse(
+                    status_code=429,
+                    content={"detail": "Rate limit exceeded"},
+                )
+
+                origin = request.headers.get("Origin")
+                if origin in ALLOWED_ORIGINS:
+                    response.headers["Access-Control-Allow-Origin"] = origin
+                    response.headers["Access-Control-Expose-Headers"] = "X-Request-ID"
+                    response.headers["Vary"] = "Origin"
+
+                response.headers["X-Request-ID"] = request_id
+
+                return response
+
+            hits.append(now)
 
     response = await call_next(request)
 
     response.headers["X-Request-ID"] = request_id
 
     return response
-
-
-@app.middleware("http")
-async def rate_limit(request: Request, call_next):
-
-    if request.method == "OPTIONS":
-        return await call_next(request)
-
-    client = request.headers.get("X-Client-Id")
-
-    # IMPORTANT:
-    # Only rate-limit requests that actually provide X-Client-Id.
-    if client:
-
-        now = time.time()
-
-        hits = client_hits[client]
-
-        hits[:] = [t for t in hits if now - t < WINDOW]
-
-        if len(hits) >= LIMIT:
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Rate limit exceeded"},
-            )
-
-        hits.append(now)
-
-    return await call_next(request)
 
 
 @app.get("/")
