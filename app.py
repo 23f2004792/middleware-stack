@@ -11,6 +11,7 @@ EMAIL = "23f2004792@ds.study.iitm.ac.in"
 
 allowed_origins = [
     "https://app-imaxbw.example.com",
+    "https://exam.sanand.workers.dev",
 ]
 
 app.add_middleware(
